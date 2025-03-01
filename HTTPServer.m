@@ -7,6 +7,36 @@
 #import <dlfcn.h>
 #import <objc/runtime.h>
 
+@interface ImageSaveHandler : NSObject
+@property (nonatomic, strong) NSNumber *requestID;
+- (instancetype)initWithRequestID:(NSNumber *)requestID;
+@end
+
+@implementation ImageSaveHandler
+- (instancetype)initWithRequestID:(NSNumber *)requestID {
+    if (self = [super init]) {
+        _requestID = requestID;
+    }
+    return self;
+}
+
+- (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error contextInfo:(void *)contextInfo {
+    if (error) {
+        [HTTPServer finishAsyncJsonResponseWithRequestID:self.requestID didSucceed:NO jsonDict:@{
+            @"success": @NO, 
+            @"error": [NSString stringWithFormat:@"Failed to save to camera roll: %@", error.localizedDescription]
+        }];
+    } else {
+        [HTTPServer finishAsyncJsonResponseWithRequestID:self.requestID didSucceed:YES jsonDict:@{
+            @"success": @YES, 
+            @"details": @"Image successfully downloaded and saved to camera roll"
+        }];
+    }
+    
+    // Self will be automatically released after this method completes
+}
+@end
+
 @interface SBApplicationController : NSObject
 + (instancetype)sharedInstanceIfExists;
 - (void)requestUninstallApplicationWithBundleIdentifier:(NSString *)bundleID options:(NSUInteger)options withCompletion:(void(^)(void))completion;
@@ -919,7 +949,7 @@ static void AcceptCallback(CFSocketRef s, CFSocketCallBackType type, CFDataRef a
                     json[@"success"] = @(success);
                     json[@"error"] = failReason ?: [NSNull null];
                     json[@"reclickCount"] = @(reclickCount);
-                    json[@"note"] = @"InstanceIndex param was ignored (legacy code path)";
+                    json[@"note"] = @"InstanceIndex param was ignored (legacy code path)"];
                     json[@"criteria"] = attrDict;
                     json[@"offsets"] = @{
                         @"start": @{@"x": @(0), @"y": @(0)},
@@ -1055,176 +1085,80 @@ static void AcceptCallback(CFSocketRef s, CFSocketCallBackType type, CFDataRef a
     NSDictionary *params = [self queryParamsFromPath:path];
     NSString *urlString = params[@"url"];
     if (!urlString.length) {
-        [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{@"success": @NO, @"error": @"Missing 'url' parameter"}];
-        return;
-    }
-    NSURL *url = [NSURL URLWithString:urlString];
-    if (!url) {
-        [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{@"success": @NO, @"error": @"Invalid URL format"}];
-        return;
-    }
-    NSLog(@"[UiShi] Attempting to download image from URL: %@", urlString);
-    NSURLSession *session = [NSURLSession sharedSession];
-    NSURLSessionDataTask *task = [session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        if (error) {
-            [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{@"success": @NO, @"error": [NSString stringWithFormat:@"Download failed: %@", error.localizedDescription]}];
-            return;
-        }
-        NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
-        if (httpResponse.statusCode != 200) {
-            [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{@"success": @NO, @"error": [NSString stringWithFormat:@"HTTP error: %ld", (long)httpResponse.statusCode]}];
-            return;
-        }
-        UIImage *image = [UIImage imageWithData:data];
-        if (!image) {
-            [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{@"success": @NO, @"error": @"Downloaded data is not a valid image"}];
-            return;
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            UIImageWriteToSavedPhotosAlbum(image, (id)self, @selector(image:didFinishSavingWithError:contextInfo:), (__bridge_retained void *)requestID);
-        });
-    }];
-    [task resume];
-}
-
-+ (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error contextInfo:(void *)contextInfo {
-    NSNumber *requestID = (__bridge_transfer NSNumber *)contextInfo;
-    if (error) {
-        [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{@"success": @NO, @"error": [NSString stringWithFormat:@"Failed to save to camera roll: %@", error.localizedDescription]}];
-    } else {
-        [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:YES jsonDict:@{@"success": @YES, @"details": @"Image successfully downloaded and saved to camera roll"}];
-    }
-}
-
-+ (void)handleSlideRelativeRequest:(NSString *)path withBBEventClass:(Class)bbEvent requestID:(NSNumber *)requestID {
-    NSDictionary *params = [self queryParamsFromPath:path];
-    
-    // Check for required parameters
-    NSString *referenceType = params[@"referenceType"] ?: @"label"; // label, class, or advanced
-    NSString *reference = params[@"reference"]; // label text, class name, or JSON string for advanced
-    BOOL exactMatch = [params[@"exactMatch"] boolValue];
-    NSInteger instanceIndex = params[@"instanceIndex"] ? [params[@"instanceIndex"] integerValue] : 0;
-    
-    CGFloat startOffsetX = [params[@"startOffsetX"] floatValue];
-    CGFloat startOffsetY = [params[@"startOffsetY"] floatValue];
-    CGFloat endOffsetX = [params[@"endOffsetX"] floatValue];
-    CGFloat endOffsetY = [params[@"endOffsetY"] floatValue];
-    NSTimeInterval duration = [params[@"duration"] doubleValue];
-    
-    if (!reference) {
         [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
-            @"success": @NO,
-            @"error": @"Missing 'reference' parameter",
-            @"details": @"The 'reference' parameter is required for relative sliding"
+            @"success": @NO, 
+            @"error": @"Missing 'url' parameter"
         }];
         return;
     }
     
-    if (duration <= 0) {
-        duration = 0.5; // Default duration
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url) {
+        [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
+            @"success": @NO, 
+            @"error": @"Invalid URL format"
+        }];
+        return;
     }
     
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if ([referenceType isEqualToString:@"label"]) {
-            SEL selector = @selector(slideRelativeToLabel:exactMatch:startOffsetX:startOffsetY:endOffsetX:endOffsetY:duration:completion:);
-            if ([bbEvent respondsToSelector:selector]) {
-                void (*method)(id, SEL, NSString*, BOOL, CGFloat, CGFloat, CGFloat, CGFloat, NSTimeInterval, void(^)(BOOL, NSString*)) = 
-                    (void*)[bbEvent methodForSelector:selector];
-                
-                method(bbEvent, selector, reference, exactMatch, startOffsetX, startOffsetY, endOffsetX, endOffsetY, duration,
-                      ^(BOOL success, NSString *message) {
-                          NSMutableDictionary *dict = [NSMutableDictionary dictionary];
-                          dict[@"success"] = @(success);
-                          dict[@"error"] = success ? [NSNull null] : (message ?: @"Unknown error");
-                          dict[@"message"] = success ? (message ?: @"Slide completed successfully") : @"Slide failed";
-                          dict[@"referenceType"] = referenceType;
-                          dict[@"reference"] = reference;
-                          dict[@"details"] = [NSString stringWithFormat:@"Slide relative to label '%@' %@", 
-                                             reference, success ? @"succeeded" : @"failed"];
-                          [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:success jsonDict:dict];
-                      });
-            } else {
-                [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
-                    @"success": @NO,
-                    @"error": @"Method not implemented",
-                    @"details": @"slideRelativeToLabel method not available"
-                }];
-            }
-        } 
-        else if ([referenceType isEqualToString:@"class"]) {
-            SEL selector = @selector(slideRelativeToClassName:startOffsetX:startOffsetY:endOffsetX:endOffsetY:duration:instanceIndex:completion:);
-            if ([bbEvent respondsToSelector:selector]) {
-                void (*method)(id, SEL, NSString*, CGFloat, CGFloat, CGFloat, CGFloat, NSTimeInterval, NSInteger, void(^)(BOOL, NSString*)) = 
-                    (void*)[bbEvent methodForSelector:selector];
-                
-                method(bbEvent, selector, reference, startOffsetX, startOffsetY, endOffsetX, endOffsetY, duration, instanceIndex,
-                      ^(BOOL success, NSString *message) {
-                          NSMutableDictionary *dict = [NSMutableDictionary dictionary];
-                          dict[@"success"] = @(success);
-                          dict[@"error"] = success ? [NSNull null] : (message ?: @"Unknown error");
-                          dict[@"message"] = success ? (message ?: @"Slide completed successfully") : @"Slide failed";
-                          dict[@"referenceType"] = referenceType;
-                          dict[@"reference"] = reference;
-                          dict[@"instanceIndex"] = @(instanceIndex);
-                          dict[@"details"] = [NSString stringWithFormat:@"Slide relative to class '%@' (instance %ld) %@", 
-                                             reference, (long)instanceIndex, success ? @"succeeded" : @"failed"];
-                          [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:success jsonDict:dict];
-                      });
-            } else {
-                [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
-                    @"success": @NO,
-                    @"error": @"Method not implemented",
-                    @"details": @"slideRelativeToClassName method not available"
-                }];
-            }
-        }
-        else if ([referenceType isEqualToString:@"advanced"]) {
-            // Parse advanced criteria from JSON string
-            NSError *jsonError;
-            NSData *jsonData = [reference dataUsingEncoding:NSUTF8StringEncoding];
-            NSDictionary *advancedCriteria = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&jsonError];
-            
-            if (jsonError || !advancedCriteria) {
-                [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
-                    @"success": @NO,
-                    @"error": @"Invalid JSON for advanced criteria",
-                    @"details": jsonError ? jsonError.localizedDescription : @"Failed to parse JSON"
-                }];
-                return;
-            }
-            
-            SEL selector = @selector(slideRelativeToAdvancedCriteria:startOffsetX:startOffsetY:endOffsetX:endOffsetY:duration:completion:);
-            if ([bbEvent respondsToSelector:selector]) {
-                void (*method)(id, SEL, NSDictionary*, CGFloat, CGFloat, CGFloat, CGFloat, NSTimeInterval, void(^)(BOOL, NSString*)) = 
-                    (void*)[bbEvent methodForSelector:selector];
-                
-                method(bbEvent, selector, advancedCriteria, startOffsetX, startOffsetY, endOffsetX, endOffsetY, duration,
-                      ^(BOOL success, NSString *message) {
-                          NSMutableDictionary *dict = [NSMutableDictionary dictionary];
-                          dict[@"success"] = @(success);
-                          dict[@"error"] = success ? [NSNull null] : (message ?: @"Unknown error");
-                          dict[@"message"] = success ? (message ?: @"Slide completed successfully") : @"Slide failed";
-                          dict[@"referenceType"] = referenceType;
-                          dict[@"details"] = [NSString stringWithFormat:@"Slide with advanced criteria %@", 
-                                             success ? @"succeeded" : @"failed"];
-                          [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:success jsonDict:dict];
-                      });
-            } else {
-                [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
-                    @"success": @NO,
-                    @"error": @"Method not implemented",
-                    @"details": @"slideRelativeToAdvancedCriteria method not available"
-                }];
-            }
-        }
-        else {
+    NSLog(@"[UiShi] Attempting to download image from URL: %@", urlString);
+    
+    // Create a URL session with a timeout
+    NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
+    config.timeoutIntervalForRequest = 30.0; // 30 second timeout
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:config];
+    
+    NSURLSessionDataTask *task = [session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        if (error) {
             [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
-                @"success": @NO,
-                @"error": @"Invalid referenceType",
-                @"details": [NSString stringWithFormat:@"Unsupported referenceType: %@", referenceType]
+                @"success": @NO, 
+                @"error": [NSString stringWithFormat:@"Download failed: %@", error.localizedDescription]
             }];
+            return;
         }
-    });
+        
+        NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+        if (httpResponse.statusCode != 200) {
+            [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
+                @"success": @NO, 
+                @"error": [NSString stringWithFormat:@"HTTP error: %ld", (long)httpResponse.statusCode]
+            }];
+            return;
+        }
+        
+        // Check for reasonable image size (10MB limit)
+        if (data.length > 10 * 1024 * 1024) {
+            [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
+                @"success": @NO, 
+                @"error": @"Image is too large (exceeds 10MB)"
+            }];
+            return;
+        }
+        
+        UIImage *image = [UIImage imageWithData:data];
+        if (!image) {
+            [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
+                @"success": @NO, 
+                @"error": @"Downloaded data is not a valid image"
+            }];
+            return;
+        }
+        
+        // Create a dedicated handler object to manage the callback
+        ImageSaveHandler *handler = [[ImageSaveHandler alloc] initWithRequestID:requestID];
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIImageWriteToSavedPhotosAlbum(image, handler, @selector(image:didFinishSavingWithError:contextInfo:), NULL);
+            
+            // Since we're using ARC, the handler will be retained by the system until the callback completes
+            // No need to manually manage the memory
+        });
+    }];
+    
+    [task resume];
+    
+    // Explicitly invalidate and nil out the session after use to prevent resource leaks
+    [session finishTasksAndInvalidate];
 }
 
 @end
