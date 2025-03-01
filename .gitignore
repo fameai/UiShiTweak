@@ -1,0 +1,66 @@
+# Theos build files
+.theos/
+packages/
+obj/
+*.deb
+
+# macOS system files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Xcode
+*.xcuserstate
+project.xcworkspace/
+xcuserdata/
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+
+# Build artifacts
+*.o
+*.dylib
+*.so
+*.a
+*.framework
+
+# Logs and debugging
+*.log
+.gdb_history
+crash.log
+
+# Editor specific
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Project specific
+/libs/*.dylib
+!/libs/.gitkeep
+
+# CocoaPods
+Pods/
+*.xcconfig
+Podfile.lock
+
+# Backup files
+*.bak
+*.backup
+*.orig
+
+# Other
+.env
+*.pem
+*.cer
+*.p12
+*.mobileprovision 

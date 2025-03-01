@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fix permissions for Swift runtime libraries
+chmod 0755 /usr/lib/swift/libswift*.dylib
+exit 0 

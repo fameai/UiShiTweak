@@ -1,0 +1,11 @@
+Package: com.pactsocial.uishi
+Name: UiShi
+Version: 1.0
+Architecture: iphoneos-arm
+Description: UI Interactions but on metheralls!
+Maintainer: Nickolas Prather
+Author: Nickolas Prather
+Section: Tweaks
+Depends: firmware (>= 13.0), mobilesubstrate (>= 0.9.5000) | com.opa334.ellekit | me.basv.substitute
+Tag: purpose::extension, role::developer
+Rootless: true 
