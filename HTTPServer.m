@@ -21,7 +21,10 @@ static NSUInteger s_boundPort = 0;
 @interface BBEvent : NSObject
 + (void)tapOnViewWithLabel:(NSString *)label;
 + (void)tapAt:(CGFloat)x y:(CGFloat)y;
-+ (void)slideFromX:(CGFloat)startX y:(CGFloat)startY toX:(CGFloat)endX y:(CGFloat)endY duration:(NSTimeInterval)duration;
++ (void)slideFromX:(CGFloat)startX y:(CGFloat)startY toX:(CGFloat)endX y:(CGFloat)endY duration:(NSTimeInterval)duration completion:(void(^)(BOOL success, NSString * _Nullable error))completion;
++ (void)slideRelativeToLabel:(NSString *)labelText exactMatch:(BOOL)exactMatch startOffsetX:(CGFloat)startOffsetX startOffsetY:(CGFloat)startOffsetY endOffsetX:(CGFloat)endOffsetX endOffsetY:(CGFloat)endOffsetY duration:(NSTimeInterval)duration completion:(void(^)(BOOL success, NSString * _Nullable error))completion;
++ (void)slideRelativeToClassName:(NSString *)className startOffsetX:(CGFloat)startOffsetX startOffsetY:(CGFloat)startOffsetY endOffsetX:(CGFloat)endOffsetX endOffsetY:(CGFloat)endOffsetY duration:(NSTimeInterval)duration instanceIndex:(NSInteger)instanceIndex completion:(void(^)(BOOL success, NSString * _Nullable error))completion;
++ (void)slideRelativeToAdvancedCriteria:(NSDictionary *)attrDict startOffsetX:(CGFloat)startOffsetX startOffsetY:(CGFloat)startOffsetY endOffsetX:(CGFloat)endOffsetX endOffsetY:(CGFloat)endOffsetY duration:(NSTimeInterval)duration completion:(void(^)(BOOL success, NSString * _Nullable error))completion;
 + (void)enterText:(NSString *)text;
 + (void)waitUntilHittable:(NSString *)identifier timeout:(NSTimeInterval)timeout;
 + (void)waitUntilVisible:(NSString *)identifier timeout:(NSTimeInterval)timeout;
@@ -31,6 +34,11 @@ static NSUInteger s_boundPort = 0;
 + (void)asyncSetTextInCellWithText:(NSString *)searchText inputText:(NSString *)inputText exactMatch:(BOOL)exactMatch stopLabels:(NSArray<NSString *> *)stopLabels timeout:(int)timeout interval:(int)interval completion:(void (^)(BOOL success, NSString * _Nullable failReason))completion;
 + (void)tapAlertButtonWithTitle:(NSString *)title exactMatch:(BOOL)exactMatch;
 + (void)asyncTapAlertButton:(NSString *)title exactMatch:(BOOL)exactMatch timeout:(int)timeout interval:(int)interval maxReclicks:(int)maxReclicks completion:(void (^)(BOOL success, NSInteger reclickCount, NSString *_Nullable failReason))completion;
++ (void)asyncSetText:(NSString *)inputText inTarget:(id)target stopLabels:(NSArray<NSString *> *)stopLabels timeout:(int)timeout interval:(int)interval completion:(void (^)(BOOL success, NSString * _Nullable failReason))completion;
++ (void)asyncSetTextByClassName:(NSString *)inputText className:(NSString *)className exactMatch:(BOOL)exactMatch stopLabels:(NSArray<NSString *> *)stopLabels timeout:(int)timeout interval:(int)interval completion:(void (^)(BOOL success, NSString * _Nullable failReason))completion;
++ (BOOL)hasElement:(id)criteria exactMatch:(BOOL)exactMatch;
++ (BOOL)hasLabel:(NSString *)labelText exactMatch:(BOOL)exactMatch;
++ (BOOL)hasClassName:(NSString *)className;
 @end
 
 @implementation HTTPServer
@@ -188,7 +196,19 @@ static void AcceptCallback(CFSocketRef s, CFSocketCallBackType type, CFDataRef a
         [self writeResponse:[self errorResponse:@"No BBEvent class found!"] toRequestID:requestID closeWhenDone:YES];
         return;
     }
-    if ([path hasPrefix:@"/asyncClick?"]) {
+    if ([path hasPrefix:@"/slide?"]) {
+        [self handleSlideRequest:path withBBEventClass:bbEvent requestID:requestID];
+        return;
+    } else if ([path hasPrefix:@"/slideRelative?"]) {
+        [self handleSlideRelativeRequest:path withBBEventClass:bbEvent requestID:requestID];
+        return;
+    } else if ([path hasPrefix:@"/slideRelativeToClass?"]) {
+        [self handleSlideRelativeRequest:path withBBEventClass:bbEvent requestID:requestID];
+        return;
+    } else if ([path hasPrefix:@"/slideRelativeToAdvanced?"]) {
+        [self handleSlideRelativeRequest:path withBBEventClass:bbEvent requestID:requestID];
+        return;
+    } else if ([path hasPrefix:@"/asyncClick?"]) {
         [self handleAsyncClickRequest:path withBBEventClass:bbEvent requestID:requestID];
         return;
     } else if ([path hasPrefix:@"/asyncSetText?"]) {
@@ -268,8 +288,6 @@ static void AcceptCallback(CFSocketRef s, CFSocketCallBackType type, CFDataRef a
         return [self handleTapRequest:path withBBEventClass:bbEvent];
     } else if ([path hasPrefix:@"/tapAt?"]) {
         return [self handleTapAtRequest:path withBBEventClass:bbEvent];
-    } else if ([path hasPrefix:@"/slide?"]) {
-        return [self handleSlideRequest:path withBBEventClass:bbEvent];
     } else if ([path hasPrefix:@"/text?"]) {
         return [self handleTextRequest:path withBBEventClass:bbEvent];
     } else if ([path hasPrefix:@"/waitHittable?"]) {
@@ -303,19 +321,56 @@ static void AcceptCallback(CFSocketRef s, CFSocketCallBackType type, CFDataRef a
     return [self okResponse:[NSString stringWithFormat:@"Tapped at (%f,%f).", x, y]];
 }
 
-+ (NSString *)handleSlideRequest:(NSString *)path withBBEventClass:(Class)bbEvent {
++ (void)handleSlideRequest:(NSString *)path withBBEventClass:(Class)bbEvent requestID:(NSNumber *)requestID {
     NSDictionary *params = [self queryParamsFromPath:path];
     CGFloat startX = [params[@"startX"] floatValue];
     CGFloat startY = [params[@"startY"] floatValue];
     CGFloat endX = [params[@"endX"] floatValue];
     CGFloat endY = [params[@"endY"] floatValue];
     NSTimeInterval duration = [params[@"duration"] doubleValue];
+    
     if (!params[@"startX"] || !params[@"startY"] || !params[@"endX"] || !params[@"endY"]) {
-        return [self badRequestResponse:@"Missing one of startX, startY, endX, endY"];
+        [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
+            @"success": @NO,
+            @"error": @"Missing required parameters (startX, startY, endX, endY)",
+            @"details": @"Slide operation failed: Missing coordinates"
+        }];
+        return;
     }
-    NSLog(@"[UiShi] HTTPServer: calling BBEvent slideFromX:%f y:%f toX:%f y:%f duration:%f", startX, startY, endX, endY, duration);
-    [bbEvent slideFromX:startX y:startY toX:endX y:endY duration:duration];
-    return [self okResponse:@"Slide action dispatched."];
+    
+    if (duration <= 0) {
+        duration = 0.3; // Default duration if not specified
+    }
+    
+    NSLog(@"[UiShi] Sliding from (%f,%f) to (%f,%f) over %f seconds", startX, startY, endX, endY, duration);
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        SEL slideSelector = @selector(slideFromX:y:toX:y:duration:completion:);
+        if (![bbEvent respondsToSelector:slideSelector]) {
+            [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
+                @"success": @NO,
+                @"error": @"BBEvent does not implement slideFromX:y:toX:y:duration:completion:",
+                @"details": @"Method not found"
+            }];
+            return;
+        }
+        
+        void (*slideFunc)(id, SEL, CGFloat, CGFloat, CGFloat, CGFloat, NSTimeInterval, void(^)(BOOL, NSString*)) = (void*)[bbEvent methodForSelector:slideSelector];
+        slideFunc(bbEvent, slideSelector, startX, startY, endX, endY, duration, ^(BOOL success, NSString *error) {
+            NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+            dict[@"success"] = @(success);
+            dict[@"error"] = error ?: [NSNull null];
+            dict[@"startPoint"] = @{@"x": @(startX), @"y": @(startY)};
+            dict[@"endPoint"] = @{@"x": @(endX), @"y": @(endY)};
+            dict[@"duration"] = @(duration);
+            if (success) {
+                dict[@"details"] = @"Slide operation completed successfully";
+            } else {
+                dict[@"details"] = [NSString stringWithFormat:@"Slide operation failed: %@", error ?: @"Unknown error"];
+            }
+            [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:success jsonDict:dict];
+        });
+    });
 }
 
 + (NSString *)handleTextRequest:(NSString *)path withBBEventClass:(Class)bbEvent {
@@ -417,18 +472,18 @@ static void AcceptCallback(CFSocketRef s, CFSocketCallBackType type, CFDataRef a
     int intervalMs = params[@"interval"] ? [params[@"interval"] intValue] : 500;
     int maxReclicks = params[@"maxReclicks"] ? [params[@"maxReclicks"] intValue] : 0;
     BOOL usePointer = [params[@"usePointerBasedReclick"] boolValue];
-    NSString *windowsParam = params[@"windows"] ?: @"key";
+    NSString *window = params[@"window"] ?: @"key";
     NSString *stopLabelsStr = params[@"stopLabels"];
     NSArray<NSString *> *stopLabels = @[];
     if (stopLabelsStr.length > 0) {
         stopLabels = [stopLabelsStr componentsSeparatedByString:@","];
     }
-    NSLog(@"[UiShi] BFS-based click => label=\"%@\", exactMatch=%d, timeout=%d, interval=%d, maxReclicks=%d, usePointer=%d, windowsParam='%@'", labelText, exactMatch, timeoutMs, intervalMs, maxReclicks, usePointer, windowsParam);
+    NSLog(@"[UiShi] BFS-based click => label=\"%@\", exactMatch=%d, timeout=%d, interval=%d, maxReclicks=%d, usePointer=%d, window='%@'", labelText, exactMatch, timeoutMs, intervalMs, maxReclicks, usePointer, window);
     dispatch_async(dispatch_get_main_queue(), ^{
-        SEL sel = @selector(asyncClickOnLabel:exactMatch:stopLabels:timeout:interval:maxReclicks:usePointerBasedReclick:windowsParam:completion:);
+        SEL sel = @selector(asyncClickOnLabel:exactMatch:stopLabels:timeout:interval:maxReclicks:usePointerBasedReclick:window:completion:);
         if ([bbEvent respondsToSelector:sel]) {
             void (*func)(id, SEL, NSString*, BOOL, NSArray*, int, int, int, BOOL, NSString*, void(^)(BOOL, NSInteger, NSString*, NSNumber*, NSString*)) = (void*)[bbEvent methodForSelector:sel];
-            func(bbEvent, sel, labelText, exactMatch, stopLabels, timeoutMs, intervalMs, maxReclicks, usePointer, windowsParam, ^(BOOL success, NSInteger reclickCount, NSString *failReason, NSNumber *foundWindowIndex, NSString *foundWindowClass) {
+            func(bbEvent, sel, labelText, exactMatch, stopLabels, timeoutMs, intervalMs, maxReclicks, usePointer, window, ^(BOOL success, NSInteger reclickCount, NSString *failReason, NSNumber *foundWindowIndex, NSString *foundWindowClass) {
                 NSMutableDictionary *dict = [NSMutableDictionary dictionary];
                 dict[@"success"] = @(success);
                 dict[@"error"] = failReason ?: [NSNull null];
@@ -436,7 +491,7 @@ static void AcceptCallback(CFSocketRef s, CFSocketCallBackType type, CFDataRef a
                 dict[@"exactMatch"] = @(exactMatch);
                 dict[@"maxReclicks"] = @(maxReclicks);
                 dict[@"reclickCount"] = @(reclickCount);
-                dict[@"windowsParam"] = windowsParam;
+                dict[@"window"] = window;
                 if (foundWindowIndex) {
                     dict[@"foundInWindowIndex"] = foundWindowIndex;
                 }
@@ -820,14 +875,14 @@ static void AcceptCallback(CFSocketRef s, CFSocketCallBackType type, CFDataRef a
     attrDict[@"exactTextMatch"] = @(exactTextMatch);
     attrDict[@"textCaseInsensitive"] = @(caseInsensitive);
     attrDict[@"instanceIndex"] = @(instanceIndex);
-    if (tintRaw.length) {
+    if (tintRaw.length > 0) {
         NSArray *rgba = [tintRaw componentsSeparatedByString:@","];
         if (rgba.count == 4) {
             CGFloat r = [rgba[0] floatValue];
             CGFloat g = [rgba[1] floatValue];
             CGFloat b = [rgba[2] floatValue];
             CGFloat a = [rgba[3] floatValue];
-            attrDict[@"tintColor"] = @[ @(r), @(g), @(b), @(a) ];
+            attrDict[@"tintColor"] = @[@(r), @(g), @(b), @(a)];
         }
     }
     if (widthVal > 0) attrDict[@"width"] = @(widthVal);
@@ -842,10 +897,16 @@ static void AcceptCallback(CFSocketRef s, CFSocketCallBackType type, CFDataRef a
                 json[@"error"] = failReason ?: [NSNull null];
                 json[@"reclickCount"] = @(reclickCount);
                 json[@"instanceIndex"] = @(instanceIndex);
-                if (!success && failReason) {
-                    json[@"details"] = [NSString stringWithFormat:@"Click operation failed: %@", failReason];
-                } else {
+                json[@"criteria"] = attrDict;
+                json[@"offsets"] = @{
+                    @"start": @{@"x": @(0), @"y": @(0)},
+                    @"end": @{@"x": @(0), @"y": @(0)}
+                };
+                json[@"duration"] = @(0);
+                if (success) {
                     json[@"details"] = [NSString stringWithFormat:@"Click operation succeeded with %ld re-clicks", (long)reclickCount];
+                } else {
+                    json[@"details"] = [NSString stringWithFormat:@"Click operation failed: %@", failReason];
                 }
                 [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:success jsonDict:json];
             });
@@ -859,6 +920,17 @@ static void AcceptCallback(CFSocketRef s, CFSocketCallBackType type, CFDataRef a
                     json[@"error"] = failReason ?: [NSNull null];
                     json[@"reclickCount"] = @(reclickCount);
                     json[@"note"] = @"InstanceIndex param was ignored (legacy code path)";
+                    json[@"criteria"] = attrDict;
+                    json[@"offsets"] = @{
+                        @"start": @{@"x": @(0), @"y": @(0)},
+                        @"end": @{@"x": @(0), @"y": @(0)}
+                    };
+                    json[@"duration"] = @(0);
+                    if (success) {
+                        json[@"details"] = [NSString stringWithFormat:@"Click operation succeeded with %ld re-clicks", (long)reclickCount];
+                    } else {
+                        json[@"details"] = [NSString stringWithFormat:@"Click operation failed: %@", failReason];
+                    }
                     [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:success jsonDict:json];
                 });
             } else {
@@ -890,14 +962,14 @@ static void AcceptCallback(CFSocketRef s, CFSocketCallBackType type, CFDataRef a
     if (text) attrDict[@"text"] = text;
     attrDict[@"exactTextMatch"] = @(exactTextMatch);
     attrDict[@"textCaseInsensitive"] = @(caseInsensitive);
-    if (tintRaw.length) {
+    if (tintRaw.length > 0) {
         NSArray *rgba = [tintRaw componentsSeparatedByString:@","];
         if (rgba.count == 4) {
             CGFloat r = [rgba[0] floatValue];
             CGFloat g = [rgba[1] floatValue];
             CGFloat b = [rgba[2] floatValue];
             CGFloat a = [rgba[3] floatValue];
-            attrDict[@"tintColor"] = @[ @(r), @(g), @(b), @(a) ];
+            attrDict[@"tintColor"] = @[@(r), @(g), @(b), @(a)];
         }
     }
     if (widthVal > 0) attrDict[@"width"] = @(widthVal);
@@ -1022,6 +1094,137 @@ static void AcceptCallback(CFSocketRef s, CFSocketCallBackType type, CFDataRef a
     } else {
         [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:YES jsonDict:@{@"success": @YES, @"details": @"Image successfully downloaded and saved to camera roll"}];
     }
+}
+
++ (void)handleSlideRelativeRequest:(NSString *)path withBBEventClass:(Class)bbEvent requestID:(NSNumber *)requestID {
+    NSDictionary *params = [self queryParamsFromPath:path];
+    
+    // Check for required parameters
+    NSString *referenceType = params[@"referenceType"] ?: @"label"; // label, class, or advanced
+    NSString *reference = params[@"reference"]; // label text, class name, or JSON string for advanced
+    BOOL exactMatch = [params[@"exactMatch"] boolValue];
+    NSInteger instanceIndex = params[@"instanceIndex"] ? [params[@"instanceIndex"] integerValue] : 0;
+    
+    CGFloat startOffsetX = [params[@"startOffsetX"] floatValue];
+    CGFloat startOffsetY = [params[@"startOffsetY"] floatValue];
+    CGFloat endOffsetX = [params[@"endOffsetX"] floatValue];
+    CGFloat endOffsetY = [params[@"endOffsetY"] floatValue];
+    NSTimeInterval duration = [params[@"duration"] doubleValue];
+    
+    if (!reference) {
+        [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
+            @"success": @NO,
+            @"error": @"Missing 'reference' parameter",
+            @"details": @"The 'reference' parameter is required for relative sliding"
+        }];
+        return;
+    }
+    
+    if (duration <= 0) {
+        duration = 0.5; // Default duration
+    }
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if ([referenceType isEqualToString:@"label"]) {
+            SEL selector = @selector(slideRelativeToLabel:exactMatch:startOffsetX:startOffsetY:endOffsetX:endOffsetY:duration:completion:);
+            if ([bbEvent respondsToSelector:selector]) {
+                void (*method)(id, SEL, NSString*, BOOL, CGFloat, CGFloat, CGFloat, CGFloat, NSTimeInterval, void(^)(BOOL, NSString*)) = 
+                    (void*)[bbEvent methodForSelector:selector];
+                
+                method(bbEvent, selector, reference, exactMatch, startOffsetX, startOffsetY, endOffsetX, endOffsetY, duration,
+                      ^(BOOL success, NSString *message) {
+                          NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+                          dict[@"success"] = @(success);
+                          dict[@"error"] = success ? [NSNull null] : (message ?: @"Unknown error");
+                          dict[@"message"] = success ? (message ?: @"Slide completed successfully") : @"Slide failed";
+                          dict[@"referenceType"] = referenceType;
+                          dict[@"reference"] = reference;
+                          dict[@"details"] = [NSString stringWithFormat:@"Slide relative to label '%@' %@", 
+                                             reference, success ? @"succeeded" : @"failed"];
+                          [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:success jsonDict:dict];
+                      });
+            } else {
+                [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
+                    @"success": @NO,
+                    @"error": @"Method not implemented",
+                    @"details": @"slideRelativeToLabel method not available"
+                }];
+            }
+        } 
+        else if ([referenceType isEqualToString:@"class"]) {
+            SEL selector = @selector(slideRelativeToClassName:startOffsetX:startOffsetY:endOffsetX:endOffsetY:duration:instanceIndex:completion:);
+            if ([bbEvent respondsToSelector:selector]) {
+                void (*method)(id, SEL, NSString*, CGFloat, CGFloat, CGFloat, CGFloat, NSTimeInterval, NSInteger, void(^)(BOOL, NSString*)) = 
+                    (void*)[bbEvent methodForSelector:selector];
+                
+                method(bbEvent, selector, reference, startOffsetX, startOffsetY, endOffsetX, endOffsetY, duration, instanceIndex,
+                      ^(BOOL success, NSString *message) {
+                          NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+                          dict[@"success"] = @(success);
+                          dict[@"error"] = success ? [NSNull null] : (message ?: @"Unknown error");
+                          dict[@"message"] = success ? (message ?: @"Slide completed successfully") : @"Slide failed";
+                          dict[@"referenceType"] = referenceType;
+                          dict[@"reference"] = reference;
+                          dict[@"instanceIndex"] = @(instanceIndex);
+                          dict[@"details"] = [NSString stringWithFormat:@"Slide relative to class '%@' (instance %ld) %@", 
+                                             reference, (long)instanceIndex, success ? @"succeeded" : @"failed"];
+                          [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:success jsonDict:dict];
+                      });
+            } else {
+                [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
+                    @"success": @NO,
+                    @"error": @"Method not implemented",
+                    @"details": @"slideRelativeToClassName method not available"
+                }];
+            }
+        }
+        else if ([referenceType isEqualToString:@"advanced"]) {
+            // Parse advanced criteria from JSON string
+            NSError *jsonError;
+            NSData *jsonData = [reference dataUsingEncoding:NSUTF8StringEncoding];
+            NSDictionary *advancedCriteria = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&jsonError];
+            
+            if (jsonError || !advancedCriteria) {
+                [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
+                    @"success": @NO,
+                    @"error": @"Invalid JSON for advanced criteria",
+                    @"details": jsonError ? jsonError.localizedDescription : @"Failed to parse JSON"
+                }];
+                return;
+            }
+            
+            SEL selector = @selector(slideRelativeToAdvancedCriteria:startOffsetX:startOffsetY:endOffsetX:endOffsetY:duration:completion:);
+            if ([bbEvent respondsToSelector:selector]) {
+                void (*method)(id, SEL, NSDictionary*, CGFloat, CGFloat, CGFloat, CGFloat, NSTimeInterval, void(^)(BOOL, NSString*)) = 
+                    (void*)[bbEvent methodForSelector:selector];
+                
+                method(bbEvent, selector, advancedCriteria, startOffsetX, startOffsetY, endOffsetX, endOffsetY, duration,
+                      ^(BOOL success, NSString *message) {
+                          NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+                          dict[@"success"] = @(success);
+                          dict[@"error"] = success ? [NSNull null] : (message ?: @"Unknown error");
+                          dict[@"message"] = success ? (message ?: @"Slide completed successfully") : @"Slide failed";
+                          dict[@"referenceType"] = referenceType;
+                          dict[@"details"] = [NSString stringWithFormat:@"Slide with advanced criteria %@", 
+                                             success ? @"succeeded" : @"failed"];
+                          [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:success jsonDict:dict];
+                      });
+            } else {
+                [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
+                    @"success": @NO,
+                    @"error": @"Method not implemented",
+                    @"details": @"slideRelativeToAdvancedCriteria method not available"
+                }];
+            }
+        }
+        else {
+            [self finishAsyncJsonResponseWithRequestID:requestID didSucceed:NO jsonDict:@{
+                @"success": @NO,
+                @"error": @"Invalid referenceType",
+                @"details": [NSString stringWithFormat:@"Unsupported referenceType: %@", referenceType]
+            }];
+        }
+    });
 }
 
 @end
